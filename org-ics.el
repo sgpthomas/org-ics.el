@@ -3,10 +3,10 @@
 ;; Copyright (C) 2022 Samuel Thomas
 
 ;; Author: Samuel Thomas <sgt@cs.utexas.edu>
-;; Package-Requires: (requests s dash f)
+;; Package-Requires: (request s dash f)
 
 ;;; Code:
-(require 'requests)
+(require 'request)
 (require 's)
 (require 'dash)
 (require 'f)
@@ -96,5 +96,6 @@
 ;;  "https://calendar.google.com/calendar/ical/sgtpeacock%40utexas.edu/private-6382215cc9d4e1bb8659bbe82e5f7a0a/basic.ics"
 ;;  "test.org"
 ;;  )
-(org-ics/import-ics-file-to-org "~/OrgFiles/org-data/test.ics"
-				"test.org")
+;; (org-ics/import-ics-file-to-org "~/OrgFiles/org-data/test.ics"
+;; 				"test.org")
+(provide 'org-ics)
