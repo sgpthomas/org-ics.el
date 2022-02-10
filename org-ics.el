@@ -24,7 +24,7 @@
 				 acc
 				 (cons (s-chomp (s-trim line)) build)))
 	(let* ((line (s-trim line))
-	       (build-acc (s-join "" (cons line (reverse build))))
+	       (build-acc (s-join "" (cons line build)))
 	       (acc (if (null build)
 			(cons line acc)
 		      (cons build-acc acc))))
@@ -55,14 +55,39 @@
 	    ((s-equals? key "END")
 	     (cons (cdr lines) (reverse acc)))
 	    (t
-	     (let ((pair `(,key . ,(format "\"%s\"" val))))
+	     (let ((pair `(,key . ,(format "%s" val))))
 	       (org-ics/parse (cdr lines) (cons pair acc))))))))
 
+(defun org-ics/to-org-event (event)
+  (let* ((summary (cdr (assoc "SUMMARY" event)))
+	 (uid (cdr (assoc "UID" event)))
+	 (dtstart (cdr (--find (s-starts-with? "DTSTART" (car it)) event)))
+	 (dtend (cdr (--find (s-starts-with? "DTEND" (car it)) event)))
+	 (descr (assoc "DESCRIPTION" event))
+	 (location (cdr (assoc "LOCATION" event)))
+	 )
+    (s-join "\n"
+	    (-concat
+	     (list (format "* %s" summary)
+		   (format ":PROPERTIES:")
+		   (format ":END:")
+		   ""
+		   ;; (format "%s" descr)
+		   )
+	     (list (format "%s" (s-split "\n" (cdr descr))))
+	     ;; 
+	     ))))
+
 (defun org-ics/process (text)
-  (format "%s"
-	  (org-ics/parse
-	   (org-ics/prepare-input text)
-	   '())))
+  (let* ((input (org-ics/prepare-input text))
+	 (data (org-ics/parse input '()))
+	 (cal (cdr (assoc "VCALENDAR" data)))
+	 (events (--filter (s-equals? (car it) "VEVENT") cal))
+	 (org-events (--map (org-ics/to-org-event (cdr it)) events))
+	 (res org-events))
+    (s-join "\n" res)
+    )
+  )
 
 (defun org-ics/import-ics-url-to-org (ics-url org-file-name)
   "Download .ics file form `ics-url' and save to `org-file-name'."
