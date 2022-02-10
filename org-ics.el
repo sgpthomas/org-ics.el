@@ -11,66 +11,58 @@
 (require 'dash)
 (require 'f)
 
+(defun org-ics/split-lines (lines acc build)
+  (if (null lines)
+      acc
+    (let* ((line (car lines))
+	   (rest (cdr lines)))
+      ;; (message "'%s'" line)
+      (if (s-starts-with? " " line)
+	  (progn
+	    ;; (message "yes")
+	    (org-ics/split-lines rest
+				 acc
+				 (cons (s-chomp (s-trim line)) build)))
+	(let* ((line (s-trim line))
+	       (build-acc (s-join "" (cons line (reverse build))))
+	       (acc (if (null build)
+			(cons line acc)
+		      (cons build-acc acc))))
+	  (org-ics/split-lines rest acc '()))))))
+
+(defun org-ics/prepare-input (text)
+  (org-ics/split-lines (reverse (s-split "\n" text)) '() '()))
+
+;; (with-current-buffer "test.org"
+;;   (erase-buffer)
+;;   (insert (s-join "\n"
+;; 		  (org-ics/prepare-input (f-read-text "~/OrgFiles/org-data/test.ics")))))
+
 (defun org-ics/split (string)
-  (let ((parts (s-split ":" string)))
+  (let ((parts (s-split-up-to ":" string 1)))
     `(,(car parts) . ,(cadr parts))))
 
-;; ([string], parse) -> ([string], res)
-(defun org-ics/build (lines acc)
-  ;; (message "lines: %s" lines)
-  (if (null lines) (cons lines acc)
-    ;; else
-    (let* ((head (car lines))
-	   (rest (cdr lines))
-	   (sp (org-ics/split head))
-	   (field (car sp))
-	   (data (cdr sp))
-	   (res (cond ((s-equals? field "BEGIN")
-		       (let* ((nxt (org-ics/build rest '()))
-			      (rest (car nxt))
-			      (parse (cdr nxt))
+(defun org-ics/parse (lines acc)
+  (if (null lines)
+      (reverse acc)
+    (let* ((line (car lines))
+	   (pair (org-ics/split line))
+	   (key (car pair))
+	   (val (cdr pair)))
+      (cond ((s-equals? key "BEGIN")
+	     (let ((section (org-ics/parse (cdr lines) '())))
+	       (org-ics/parse (car section) (cons `(,val . ,(cdr section)) acc))))
+	    ((s-equals? key "END")
+	     (cons (cdr lines) (reverse acc)))
+	    (t
+	     (let ((pair `(,key . ,(format "\"%s\"" val))))
+	       (org-ics/parse (cdr lines) (cons pair acc))))))))
 
-			      (_ (message "n: %s" acc))
-			      (_ (message "p: %s" `(,data . ,parse)))
-			      )
-			 (cons rest
-			       (append acc (list `(,data . ,parse))))))
-		      ((s-equals? field "END")
-		       (cons rest acc))
-		      (t
-		       (cons rest (append acc `(,sp))
-			     )
-		       ;; (org-ics/build rest (append acc `(,sp)))
-		       ))))
-      (org-ics/build (car res) (cdr res))
-      ;; res
-      )))
-
-(defun org-ics/process (ics-data)
-  (let ((res (cdr (org-ics/build (s-split "\n" ics-data) '()))))
-    ;; (format "%s" (s-join "\n" (--map (format "%s" it) (cdr res))))
-    (format "%s" res)
-    )
-  )
-
-;; (defun org-ics/process (ics-data)
-;;   (let* ((lines (s-split "\n" ics-data))
-;; 	 (res (--reduce-from (cond ((s-starts-with? "BEGIN" it)
-;; 				    (cons (append (car acc) `(,(cdr (org-ics/split it))))
-;; 					  (cdr acc)))
-;; 				   ((s-starts-with? "END" it)
-;; 				    (cons '()
-;; 					  (append (cdr acc) (list (car acc)))))
-;; 				   (t
-;; 				    (cons (append (car acc) `(,(org-ics/split it)))
-;; 					  (cdr acc))
-;; 				    ))
-;; 			     '(() . ())
-;; 			     lines
-;; 			     )))
-;;     (format "%s" (s-join "\n" (--map (format "%s" it) (cdr res))))
-;;     )
-;;   )
+(defun org-ics/process (text)
+  (format "%s"
+	  (org-ics/parse
+	   (org-ics/prepare-input text)
+	   '())))
 
 (defun org-ics/import-ics-url-to-org (ics-url org-file-name)
   "Download .ics file form `ics-url' and save to `org-file-name'."
@@ -80,7 +72,8 @@
       :complete (cl-function (lambda (&key data &allow-other-keys) (setq msg data))))
     (with-current-buffer (get-buffer-create org-file-name)
       (erase-buffer)
-      (insert (org-ics/process msg)))))
+      (insert (org-ics/process msg))
+      (pp-buffer))))
 
 (defun org-ics/import-ics-file-to-org (ics-file org-file-name)
   "Download .ics file form `ics-url' and save to `org-file-name'."
@@ -94,6 +87,6 @@
 ;;  "https://calendar.google.com/calendar/ical/sgtpeacock%40utexas.edu/private-6382215cc9d4e1bb8659bbe82e5f7a0a/basic.ics"
 ;;  "test.org"
 ;;  )
-(org-ics/import-ics-file-to-org "~/OrgFiles/org-data/test.ics" "test.org")
+;; (org-ics/import-ics-file-to-org "~/OrgFiles/org-data/test.ics" "test.org")
 
 (provide 'org-ics)
