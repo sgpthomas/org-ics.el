@@ -73,6 +73,31 @@
 	 (b (replace-regexp-in-string "\\\\\\(.\\)" "\\1" a)))
     b))
 
+;; (defun org-ics/format (year month day hour min)
+;;   (let* ((date (if ()))))
+;;   )
+
+(defun org-ics/parse-date (start end)
+  (let* ((start (iso8601-parse start))
+	 (syear (decoded-time-year start))
+	 (smonth (decoded-time-month start))
+	 (sday (decoded-time-day start))
+	 (shour (decoded-time-hour start))
+	 (smin (decoded-time-minute start))
+
+	 (end (iso8601-parse end))
+	 (eyear (decoded-time-year end))
+	 (emonth (decoded-time-month end))
+	 (eday (decoded-time-day end))
+	 (ehour (decoded-time-hour end))
+	 (emin (decoded-time-minute end))
+
+	 (start-str (format "<%04d-%02d-%02d %02d:%02d>"
+			    syear smonth sday shour smin))
+	 (end-str (format "<%04d-%02d-%02d %02d:%02d>"
+			  eyear emonth eday ehour emin)))
+    (format "%s--%s" start-str end-str)))
+
 (defun org-ics/to-org-event (event)
   "Produce a string representing an org event from an event structure."
 
@@ -87,6 +112,11 @@
 		  ":PROPERTIES:"
 		  ":END:"
 		  ""
+		  dtstart
+		  (format "%s"
+			  (org-ics/parse-date dtstart dtend)
+			  ;; (org-ics/parse-date dtend)
+			  )
 		  (org-ics/unescape descr)))))
 
 (defun org-ics/process (text)
