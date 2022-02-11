@@ -11,37 +11,46 @@
 (require 'dash)
 (require 'f)
 
+(defun org-ics/split (string)
+  "Split the ics line `string' into key and value."
+  (let ((parts (s-split-up-to ":" string 1)))
+    `(,(car parts) . ,(cadr parts))))
+
 (defun org-ics/split-lines (lines acc build)
+  "Recursively go through .ics file and parse into 'lines'.
+   This is trickier than it should be because the .ics format
+   only allows lines of 75 characters. Any text that's longer
+   must be split up into multiple lines. This makes parsing more
+   difficult.
+
+   This works by going through the file backwards. If a line begins
+   with a space, we add it to the `build' list. This indicates that
+   we are currently building up a new line. When we finally get to a
+   normal line, we add the stuff in `build' to the constructed line."
+
   (if (null lines)
-      (progn
-	(message "%s" acc)
-	acc)
+      acc
     (let* ((line (car lines))
 	   (rest (cdr lines)))
-      ;; (message "'%s'" line)
       (if (s-starts-with? " " line)
-	  (progn
-	    ;; (message "yes")
-	    (org-ics/split-lines rest
-				 acc
-				 (cons (s-chop-prefix " " line) build)))
-	(let* (;; (line (s-chomp line))
-	       (build-acc (s-join "" (cons line build)))
+	  (org-ics/split-lines rest
+			       acc
+			       (cons (s-chop-prefix " " line) build))
+	(let* ((build-acc (s-join "" (cons line build)))
 	       (acc (if (null build)
 			(cons line acc)
 		      (cons build-acc acc))))
 	  (org-ics/split-lines rest acc '()))))))
 
 (defun org-ics/prepare-input (text)
+  "This function normalizes the input and produces a list where an
+   element in the list corresponds to an entry in the .ics file."
+
   (org-ics/split-lines (reverse (s-split "\n" text)) '() '()))
 
-(defun org-ics/split (string)
-  (let ((parts (s-split-up-to ":" string 1)))
-    (when (s-equals? (car parts) "DESCRIPTION")
-      (message "%s" (cadr parts)))
-    `(,(car parts) . ,(cadr parts))))
-
 (defun org-ics/parse (lines acc)
+  "Parse an .ics file into a tree."
+
   (if (null lines)
       (reverse acc)
     (let* ((line (car lines))
@@ -58,11 +67,15 @@
 	       (org-ics/parse (cdr lines) (cons pair acc))))))))
 
 (defun org-ics/unescape (string)
+  "Unescape commas and newlines."
+  
   (let* ((a (replace-regexp-in-string "\\\\n" "\n" string))
 	 (b (replace-regexp-in-string "\\\\\\(.\\)" "\\1" a)))
     b))
 
 (defun org-ics/to-org-event (event)
+  "Produce a string representing an org event from an event structure."
+
   (let* ((summary (cdr (assoc "SUMMARY" event)))
 	 (uid (cdr (assoc "UID" event)))
 	 (dtstart (cdr (--find (s-starts-with? "DTSTART" (car it)) event)))
@@ -77,6 +90,8 @@
 		  (org-ics/unescape descr)))))
 
 (defun org-ics/process (text)
+  "Process the text of an .ics file into a .org file."
+
   (let* ((input (org-ics/prepare-input text))
 	 (data (org-ics/parse input '()))
 	 (cal (cdr (assoc "VCALENDAR" data)))
@@ -92,6 +107,7 @@
 
 (defun org-ics/import-ics-url-to-org (ics-url org-file-name)
   "Download .ics file form `ics-url' and save to `org-file-name'."
+
   (let ((msg '()))
     (request ics-url
       :sync t
@@ -102,6 +118,7 @@
 
 (defun org-ics/import-ics-file-to-org (ics-file org-file-name)
   "Download .ics file form `ics-url' and save to `org-file-name'."
+
   (let ((text (f-read-text ics-file)))
     (with-current-buffer (get-buffer-create org-file-name)
       (erase-buffer)
