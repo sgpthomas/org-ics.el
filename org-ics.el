@@ -11,6 +11,8 @@
 (require 'dash)
 (require 'f)
 
+;; ==== ICS Parsing ==== ;;
+
 (defun org-ics/split (string)
   "Split the ics line `string' into key and value."
   (let ((parts (s-split-up-to ":" string 1)))
@@ -66,6 +68,100 @@
 	     (let ((pair `(,key . ,val)))
 	       (org-ics/parse (cdr lines) (cons pair acc))))))))
 
+;; ==== Event Structure ==== ;;
+
+;;   spec: https://datatracker.ietf.org/doc/html/rfc5545#section-3.8.5.3
+(cl-defstruct org-ics/repeat
+  "A structure representing a repeat definition in an ics file."
+  date-start
+  freq week-start until
+  byyear bymonth byday
+  count
+  (interval 1))
+
+(defun org-ics/parse-repeat (dtstart repeat)
+  "Parse a repeat string into a repeat struct."
+
+  (if (or (null dtstart) (null repeat))
+      (make-org-ics/repeat)
+    (let* (;; (dtstart (decode-time))
+	   ;; (repeat "FREQ=WEEKLY;WKST=SU;UNTIL=20220507T045959Z;BYDAY=TU,TH")
+	   (parts (s-split ";" repeat))
+	   (parts (--map (s-split "=" it) parts))
+	   (until (cadr (assoc "UNTIL" parts)))
+	   (byday (cadr (assoc "BYDAY" parts))))
+      (make-org-ics/repeat
+       :date-start dtstart
+       :freq (cadr (assoc "FREQ" parts))
+       :week-start (cadr (assoc "WKST" parts))
+       :until (when until (iso8601-parse until))
+       :byyear (cadr (assoc "BYYEAR" parts))
+       :bymonth (cadr (assoc "BYMONTH" parts))
+       :byday (when byday (s-split "," byday))
+       :count (cadr (assoc "COUNT" parts))
+       :interval (cadr (assoc "INTERVAL" parts))))))
+
+(defun org-ics/repeat-string (repeat-data)
+  (let* ((interval (org-ics/repeat-interval repeat-data))
+	 (freq (org-ics/repeat-freq repeat-data))
+	 (freq-letter (cond ((s-equals? freq "WEEKLY") "w")
+			    ((s-equals? freq "DAILY") "d")
+			    ((s-equals? freq "YEARLY") "y"))))
+    (format "+%s%s" interval freq)))
+
+(cl-defstruct org-ics/event
+  "Represents an .ics event."
+  summary description
+  id location status
+  start-date end-date
+  repeat raw-repeat)
+
+(defun org-ics/parse-event (event)
+  "Parse an event association list into an event structure."
+  (let* ((start-date (cdr (--find (s-starts-with? "DTSTART" (car it)) event)))
+	 (start-date (iso8601-parse start-date))
+	 (end-date (cdr (--find (s-starts-with? "DTEND" (car it)) event)))
+	 (end-date (iso8601-parse end-date)))
+    (make-org-ics/event
+     :summary (cdr (assoc "SUMMARY" event))
+     :description (cdr (assoc "DESCRIPTION" event))
+     :id (cdr (assoc "UID" event))
+     :location (cdr (assoc "LOCATION" event))
+     :status (cdr (assoc "STATUS" event))
+     :start-date start-date
+     :end-date end-date
+     :repeat (org-ics/parse-repeat
+	      start-date
+	      (cdr (assoc "RRULE" event)))
+     :raw-repeat (cdr (assoc "RRULE" event)))))
+
+(defun org-ics/to-org-event (event)
+  "Produce a string representing an org event from an event structure."
+
+  (let* ((summary (org-ics/event-summary event))
+	 (uid (org-ics/event-id event))
+	 (dtstart (org-ics/event-start-date event))
+	 (dtend (org-ics/event-end-date event))
+	 (descr (org-ics/event-description event))
+	 (location (org-ics/event-location event))
+	 (status (org-ics/event-status event))
+	 (repeat (org-ics/event-repeat event)))
+    (s-join "\n"
+	    (list (format "* %s" summary)
+		  ":PROPERTIES:"
+		  (format ":ID: %s" uid)
+		  (format ":LOCATION: %s" location)
+		  (format ":STATUS: %s" status)
+		  ":END:"
+		  ""
+		  (format "%s"
+			  (org-ics/parse-date dtstart dtend repeat))
+		  (format "repeat: %s" repeat)
+		  (format "raw: %s" (org-ics/event-raw-repeat event))
+		  (org-ics/unescape descr)))))
+
+;; ==== ====
+
 (defun org-ics/unescape (string)
   "Unescape commas and newlines."
   
@@ -73,51 +169,65 @@
 	 (b (replace-regexp-in-string "\\\\\\(.\\)" "\\1" a)))
     b))
 
-;; (defun org-ics/format (year month day hour min)
-;;   (let* ((date (if ()))))
-;;   )
+(defun org-ics/format (time-string)
+  (let* ((tz-delta (make-decoded-time :hour -6))
+	 (time (decoded-time-add time-string tz-delta))
+	 (year (decoded-time-year time))
+	 (month (decoded-time-month time))
+	 (day (decoded-time-day time))
+	 (hour (decoded-time-hour time))
+	 (min (decoded-time-minute time))
+	 (tz (decoded-time-zone time))
 
-(defun org-ics/parse-date (start end)
-  (let* ((start (iso8601-parse start))
-	 (syear (decoded-time-year start))
-	 (smonth (decoded-time-month start))
-	 (sday (decoded-time-day start))
-	 (shour (decoded-time-hour start))
-	 (smin (decoded-time-minute start))
+	 (date (if (or (null year) (null month) (null day))
+		   ""
+		 (format "%04d-%02d-%02d" year month day)))
+	 (time (if (or (null hour) (null min))
+		   ""
+		 (format "%02d:%02d" hour min))))
+    (cons date time)))
 
-	 (end (iso8601-parse end))
-	 (eyear (decoded-time-year end))
-	 (emonth (decoded-time-month end))
-	 (eday (decoded-time-day end))
-	 (ehour (decoded-time-hour end))
-	 (emin (decoded-time-minute end))
+(defun org-ics/parse-date (start end &optional repeat)
+  (let* ((start-str (org-ics/format start))
+	 (end-str (org-ics/format end))
+	 (repeat-str (if (null repeat) ""
+		       ""
+		       ;; (org-ics/repeat-string (org-ics/parse-repeat repeat start))
+		       )))
+    (if (s-equals? (car start-str) (car end-str))
+	(format "<%s %s-%s %s>"
+		(car start-str) (cdr start-str) (cdr end-str)
+		repeat-str)
+      (format "<%s %s>--<%s %s>"
+	      (car start-str) (cdr start-str)
+	      (car end-str) (cdr end-str)))))
 
-	 (start-str (format "<%04d-%02d-%02d %02d:%02d>"
-			    syear smonth sday shour smin))
-	 (end-str (format "<%04d-%02d-%02d %02d:%02d>"
-			  eyear emonth eday ehour emin)))
-    (format "%s--%s" start-str end-str)))
+(defun org-ics/event-filter (event)
+  "Make sure that the event is not happening more than a week in the past."
 
-(defun org-ics/to-org-event (event)
-  "Produce a string representing an org event from an event structure."
+  (let* ((dtstart (org-ics/event-start-date event))
+	 (delta (make-decoded-time :day 7))
+	 (start (decoded-time-add dtstart delta))
+	 (current-time (decode-time)))
+    (time-less-p (encode-time current-time) (encode-time start))))
 
-  (let* ((summary (cdr (assoc "SUMMARY" event)))
-	 (uid (cdr (assoc "UID" event)))
-	 (dtstart (cdr (--find (s-starts-with? "DTSTART" (car it)) event)))
-	 (dtend (cdr (--find (s-starts-with? "DTEND" (car it)) event)))
-	 (descr (cdr (assoc "DESCRIPTION" event)))
-	 (location (cdr (assoc "LOCATION" event))))
-    (s-join "\n"
-	    (list (format "* %s" summary)
-		  ":PROPERTIES:"
-		  ":END:"
-		  ""
-		  dtstart
-		  (format "%s"
-			  (org-ics/parse-date dtstart dtend)
-			  ;; (org-ics/parse-date dtend)
-			  )
-		  (org-ics/unescape descr)))))
+(defun org-ics/expand-repeat (event)
+  "Expand events that repeat multiple times per week into separate events."
+
+  (let* (;; (repeat (cdr (assoc "RRULE" event)))
+	 (event '(event))
+	 (repeat "FREQ=WEEKLY;WKST=SU;UNTIL=20220507T045959Z;BYDAY=TU,TH")
+	 (data (org-ics/parse-repeat repeat))
+	 (byday-str (cadr (assoc "BYDAY" data)))
+	 (byday (s-split "," byday-str))
+	 )
+    (if (null byday)
+	(list event)
+      (--map (format "BYDAY=%s" it) byday))
+    )
+("BYDAY=TU" "BYDAY=TH")
+
+  )
 
 (defun org-ics/process (text)
   "Process the text of an .ics file into a .org file."
@@ -126,7 +236,10 @@
 	 (data (org-ics/parse input '()))
 	 (cal (cdr (assoc "VCALENDAR" data)))
 	 (events (--filter (s-equals? (car it) "VEVENT") cal))
-	 (org-events (--map (org-ics/to-org-event (cdr it)) events))
+	 (events (--map (org-ics/parse-event (cdr it)) events))
+	 (events (-filter 'org-ics/event-filter events))
+	 ;; (events (-flatten-n 1 (-map 'org-ics/expand-repeat events)))
+	 (org-events (-map 'org-ics/to-org-event events))
 	 (res org-events))
     (s-concat
      "#+TITLE: Calendar\n"
@@ -154,10 +267,10 @@
       (erase-buffer)
       (insert (org-ics/process text)))))
 
-;; (org-ics/import-ics-url-to-org
-;;  "https://calendar.google.com/calendar/ical/sgtpeacock%40utexas.edu/private-6382215cc9d4e1bb8659bbe82e5f7a0a/basic.ics"
-;;  "test.org"
-;;  )
+(org-ics/import-ics-url-to-org
+ "https://calendar.google.com/calendar/ical/sgtpeacock%40utexas.edu/private-6382215cc9d4e1bb8659bbe82e5f7a0a/basic.ics"
+ "test.org"
+ )
 ;; (org-ics/import-ics-file-to-org "~/OrgFiles/org-data/test.ics" "test.org")
 
 (provide 'org-ics)
