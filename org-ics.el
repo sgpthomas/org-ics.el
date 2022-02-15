@@ -11,6 +11,24 @@
 (require 'dash)
 (require 'f)
 
+;; ==== User Configuration ==== ;;
+
+(defcustom org-ics/calendars nil
+  "List of calendars to load into org files.")
+
+(cl-defstruct org-ics/calendar
+  "Represents a user defined calendar."
+  name file url destination category file-tag)
+
+(defun org-ics/parse-calendar (cal)
+  (make-org-ics/calendar
+   :name (plist-get cal :name)
+   :file (plist-get cal :file)
+   :url (plist-get cal :url)
+   :destination (plist-get cal :destination)
+   :category (plist-get cal :category)
+   :file-tag (plist-get cal :file-tag)))
+
 ;; ==== ICS Parsing ==== ;;
 
 (defun org-ics/split (string)
@@ -248,29 +266,42 @@
      "\n"
      (s-join "\n" res))))
 
-(defun org-ics/import-ics-url-to-org (ics-url org-file-name)
+;; ==== User interface ==== ;;
+
+(defun org-ics/import-ics-url-to-org (cal)
   "Download .ics file form `ics-url' and save to `org-file-name'."
 
   (let ((msg '()))
-    (request ics-url
+    (request (org-ics/calendar-url cal)
       :sync t
       :complete (cl-function (lambda (&key data &allow-other-keys) (setq msg data))))
-    (with-current-buffer (get-buffer-create org-file-name)
+    (with-current-buffer (find-file-noselect (org-ics/calendar-destination cal))
       (erase-buffer)
-      (insert (org-ics/process msg)))))
+      (insert (org-ics/process msg))
+      (save-buffer))))
 
-(defun org-ics/import-ics-file-to-org (ics-file org-file-name)
+(defun org-ics/import-ics-file-to-org (cal)
   "Download .ics file form `ics-url' and save to `org-file-name'."
 
-  (let ((text (f-read-text ics-file)))
-    (with-current-buffer (get-buffer-create org-file-name)
+  (let ((text (f-read-text (org-ics/calendar-file cal))))
+    (with-current-buffer (find-file-noselect org-ics/calendar-destination cal)
       (erase-buffer)
-      (insert (org-ics/process text)))))
+      (insert (org-ics/process text))
+      (save-buffer))))
 
-(org-ics/import-ics-url-to-org
- "https://calendar.google.com/calendar/ical/sgtpeacock%40utexas.edu/private-6382215cc9d4e1bb8659bbe82e5f7a0a/basic.ics"
- "test.org"
- )
+(defun org-ics/import-all ()
+  "Import all calendars defined in `org-ics/calendars'."
+  (interactive)
+  (let* ((cals (-map 'org-ics/parse-calendar org-ics/calendars)))
+    (--map (cond ((org-ics/calendar-file it) (org-ics/import-ics-file-to-org it))
+		 ((org-ics/calendar-url it) (org-ics/import-ics-url-to-org it)))
+	   cals)))
+
+;; (org-ics/import-ics-url-to-org
+;;  "https://calendar.google.com/calendar/ical/sgtpeacock%40utexas.edu/private-6382215cc9d4e1bb8659bbe82e5f7a0a/basic.ics"
+;;  "test.org"
+;;  )
 ;; (org-ics/import-ics-file-to-org "~/OrgFiles/org-data/test.ics" "test.org")
+
 
 (provide 'org-ics)
