@@ -102,9 +102,7 @@
 
   (if (or (null dtstart) (null repeat))
       (make-org-ics/repeat)
-    (let* (;; (dtstart (decode-time))
-	   ;; (repeat "FREQ=WEEKLY;WKST=SU;UNTIL=20220507T045959Z;BYDAY=TU,TH")
-	   (parts (s-split ";" repeat))
+    (let* ((parts (s-split ";" repeat))
 	   (parts (--map (s-split "=" it) parts))
 	   (until (cadr (assoc "UNTIL" parts)))
 	   (byday (cadr (assoc "BYDAY" parts))))
@@ -131,15 +129,23 @@
   "Represents an .ics event."
   summary description
   id location status
-  start-date end-date
-  repeat raw-repeat)
+  start-date end-date date-timezone
+  repeat raw-repeat
+  raw-event)
+
+(defun org-ics/parse-dtstart (dtstart)
+  (let* ((vals (cdr (s-split ";" dtstart)))
+	 (alst (--map (s-split "=" it) vals))
+	 (tzid (cadr (assoc "TZID" alst))))
+    tzid))
 
 (defun org-ics/parse-event (event)
   "Parse an event association list into an event structure."
-  (let* ((start-date (cdr (--find (s-starts-with? "DTSTART" (car it)) event)))
-	 (start-date (iso8601-parse start-date))
-	 (end-date (cdr (--find (s-starts-with? "DTEND" (car it)) event)))
-	 (end-date (iso8601-parse end-date)))
+  (let* ((start-date-pair (--find (s-starts-with? "DTSTART" (car it)) event))
+	 (start-date (iso8601-parse (cdr start-date-pair)))
+	 (end-date-pair (--find (s-starts-with? "DTEND" (car it)) event))
+	 (end-date (iso8601-parse (cdr end-date-pair)))
+	 (date-timezone (org-ics/parse-dtstart (car start-date-pair))))
     (make-org-ics/event
      :summary (cdr (assoc "SUMMARY" event))
      :description (cdr (assoc "DESCRIPTION" event))
@@ -148,10 +154,12 @@
      :status (cdr (assoc "STATUS" event))
      :start-date start-date
      :end-date end-date
+     :date-timezone date-timezone
      :repeat (org-ics/parse-repeat
 	      start-date
 	      (cdr (assoc "RRULE" event)))
-     :raw-repeat (cdr (assoc "RRULE" event)))))
+     :raw-repeat (cdr (assoc "RRULE" event))
+     :raw-event event)))
 
 (defun org-ics/to-org-event (event)
   "Produce a string representing an org event from an event structure."
@@ -160,6 +168,7 @@
 	 (uid (org-ics/event-id event))
 	 (dtstart (org-ics/event-start-date event))
 	 (dtend (org-ics/event-end-date event))
+	 (dttz (org-ics/event-date-timezone event))
 	 (descr (org-ics/event-description event))
 	 (location (org-ics/event-location event))
 	 (status (org-ics/event-status event))
@@ -171,12 +180,21 @@
 		  (format ":LOCATION: %s" location)
 		  (format ":STATUS: %s" status)
 		  ":END:"
-		  ""
 		  (format "%s"
-			  (org-ics/parse-date dtstart dtend repeat))
-		  (format "repeat: %s" repeat)
-		  (format "raw: %s" (org-ics/event-raw-repeat event))
-		  (org-ics/unescape descr)))))
+			  (org-ics/parse-date dtstart dtend dttz repeat))
+
+		  (org-ics/unescape descr)
+		  ""
+		  ;; (format "repeat: %s" repeat)
+		  ;; (format "raw: %s" (org-ics/event-raw-repeat event))
+		  ;; (format "tz: %s %s" dttz (org-ics/tz-offset dttz))
+		  ;; ""
+		  ;; "#+BEGIN_SRC emacs-lisp"
+		  ;; (pp-to-string
+		  ;;  (org-ics/event-raw-event event))
+		  ;; "#+END_SRC emacs-lisp"
+		  ;; ""
+		  ))))
 
 ;; ==== ====
 
@@ -187,9 +205,26 @@
 	 (b (replace-regexp-in-string "\\\\\\(.\\)" "\\1" a)))
     b))
 
-(defun org-ics/format (time-string)
-  (let* ((tz-delta (make-decoded-time :hour -6))
-	 (time (decoded-time-add time-string tz-delta))
+
+(defun org-ics/tz-offset (name)
+  (let* ((cmd (s-join " " (list (format "TZ=%s" name)
+				"date +%z")))
+	 (res (shell-command-to-string cmd))
+	 (res (s-trim res))
+	 (dir (substring res 0 1))
+	 (hour (substring res 1 3))
+	 (min (substring res 3 5))
+	 (hour-int (- (string-to-number (format "%s%s" dir hour))))
+	 (min-int (- (string-to-number (format "%s%s" dir min))))
+	 (delta (make-decoded-time :hour hour-int :minute min-int)))
+    delta))
+
+(defun org-ics/format (time-string tz)
+  (let* ((tz-delta (org-ics/tz-offset tz))
+	 (utc (decoded-time-add time-string tz-delta))
+	 (time (decoded-time-add
+		utc
+		(make-decoded-time :second (car (current-time-zone)))))
 	 (year (decoded-time-year time))
 	 (month (decoded-time-month time))
 	 (day (decoded-time-day time))
@@ -205,9 +240,9 @@
 		 (format "%02d:%02d" hour min))))
     (cons date time)))
 
-(defun org-ics/parse-date (start end &optional repeat)
-  (let* ((start-str (org-ics/format start))
-	 (end-str (org-ics/format end))
+(defun org-ics/parse-date (start end tz &optional repeat)
+  (let* ((start-str (org-ics/format start tz))
+	 (end-str (org-ics/format end tz))
 	 (repeat-str (if (null repeat) ""
 		       ""
 		       ;; (org-ics/repeat-string (org-ics/parse-repeat repeat start))
@@ -229,23 +264,23 @@
 	 (current-time (decode-time)))
     (time-less-p (encode-time current-time) (encode-time start))))
 
-(defun org-ics/expand-repeat (event)
-  "Expand events that repeat multiple times per week into separate events."
+;; (defun org-ics/expand-repeat (event)
+;;   "Expand events that repeat multiple times per week into separate events."
 
-  (let* (;; (repeat (cdr (assoc "RRULE" event)))
-	 (event '(event))
-	 (repeat "FREQ=WEEKLY;WKST=SU;UNTIL=20220507T045959Z;BYDAY=TU,TH")
-	 (data (org-ics/parse-repeat repeat))
-	 (byday-str (cadr (assoc "BYDAY" data)))
-	 (byday (s-split "," byday-str))
-	 )
-    (if (null byday)
-	(list event)
-      (--map (format "BYDAY=%s" it) byday))
-    )
-("BYDAY=TU" "BYDAY=TH")
+;;   (let* (;; (repeat (cdr (assoc "RRULE" event)))
+;; 	 (event '(event))
+;; 	 (repeat "FREQ=WEEKLY;WKST=SU;UNTIL=20220507T045959Z;BYDAY=TU,TH")
+;; 	 (data (org-ics/parse-repeat repeat))
+;; 	 (byday-str (cadr (assoc "BYDAY" data)))
+;; 	 (byday (s-split "," byday-str))
+;; 	 )
+;;     (if (null byday)
+;; 	(list event)
+;;       (--map (format "BYDAY=%s" it) byday))
+;;     )
+;; ("BYDAY=TU" "BYDAY=TH")
 
-  )
+;;   )
 
 (defun org-ics/process (text)
   "Process the text of an .ics file into a .org file."
@@ -256,17 +291,35 @@
 	 (events (--filter (s-equals? (car it) "VEVENT") cal))
 	 (events (--map (org-ics/parse-event (cdr it)) events))
 	 (events (-filter 'org-ics/event-filter events))
-	 ;; (events (-flatten-n 1 (-map 'org-ics/expand-repeat events)))
 	 (org-events (-map 'org-ics/to-org-event events))
 	 (res org-events))
-    (s-concat
-     "#+TITLE: Calendar\n"
-     "#+CATEGORY: Calendar\n"
-     "#+FILETAGS: EVENT\n"
-     "\n"
-     (s-join "\n" res))))
+    ;; (s-concat
+    ;;  "#+TITLE: Calendar\n"
+    ;;  "#+CATEGORY: Calendar\n"
+    ;;  "#+FILETAGS: EVENT\n"
+    ;;  "\n"
+    ;;  (s-join "\n" res))
+    (s-join "\n" res)))
 
 ;; ==== User interface ==== ;;
+(defun org-ics/header (cal)
+  "Generate a header from `cal' for a .org file."
+
+  (let* ((name (org-ics/calendar-name cal))
+	 (category (org-ics/calendar-category cal))
+	 (filetag (org-ics/calendar-file-tag cal)))
+    (s-concat
+     (format "#+TITLE: %s\n" name)
+     (format "#+CATEGORY: %s\n" category)
+     (format "#+FILETAGS: %s\n" filetag)
+     "\n")))
+
+(defun org-ics/process-to-file (ics-text cal)
+  (with-current-buffer (find-file-noselect (org-ics/calendar-destination cal))
+    (erase-buffer)
+    (insert (org-ics/header cal))
+    (insert (org-ics/process ics-text))
+    (save-buffer)))
 
 (defun org-ics/import-ics-url-to-org (cal)
   "Download .ics file form `ics-url' and save to `org-file-name'."
@@ -275,19 +328,13 @@
     (request (org-ics/calendar-url cal)
       :sync t
       :complete (cl-function (lambda (&key data &allow-other-keys) (setq msg data))))
-    (with-current-buffer (find-file-noselect (org-ics/calendar-destination cal))
-      (erase-buffer)
-      (insert (org-ics/process msg))
-      (save-buffer))))
+    (org-ics/process-to-file msg cal)))
 
 (defun org-ics/import-ics-file-to-org (cal)
   "Download .ics file form `ics-url' and save to `org-file-name'."
 
   (let ((text (f-read-text (org-ics/calendar-file cal))))
-    (with-current-buffer (find-file-noselect org-ics/calendar-destination cal)
-      (erase-buffer)
-      (insert (org-ics/process text))
-      (save-buffer))))
+    (org-ics/process-to-file text cal)))
 
 (defun org-ics/import-all ()
   "Import all calendars defined in `org-ics/calendars'."
@@ -296,6 +343,9 @@
     (--map (cond ((org-ics/calendar-file it) (org-ics/import-ics-file-to-org it))
 		 ((org-ics/calendar-url it) (org-ics/import-ics-url-to-org it)))
 	   cals)))
+
+(org-ics/import-all)
+
 
 ;; (org-ics/import-ics-url-to-org
 ;;  "https://calendar.google.com/calendar/ical/sgtpeacock%40utexas.edu/private-6382215cc9d4e1bb8659bbe82e5f7a0a/basic.ics"
