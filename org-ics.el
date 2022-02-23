@@ -56,7 +56,8 @@
 	  (org-ics/split-lines rest
 			       acc
 			       (cons (s-chop-prefix " " line) build))
-	(let* ((build-acc (s-join "" (cons line build)))
+	(let* ((_ (message "here"))
+	       (build-acc (s-join "" (cons line build)))
 	       (acc (if (null build)
 			(cons line acc)
 		      (cons build-acc acc))))
@@ -125,6 +126,11 @@
 			    ((s-equals? freq "YEARLY") "y"))))
     (format "+%s%s" interval freq)))
 
+(defun org-ics/repeats? (repeat)
+  "Returns nil if the repeat structure doesn't repeat."
+
+  (not (null (org-ics/repeat-freq repeat))))
+
 (cl-defstruct org-ics/event
   "Represents an .ics event."
   summary description
@@ -184,16 +190,14 @@
 			  (org-ics/parse-date dtstart dtend dttz repeat))
 
 		  (org-ics/unescape descr)
-		  ""
-		  ;; (format "repeat: %s" repeat)
-		  ;; (format "raw: %s" (org-ics/event-raw-repeat event))
+		  (format "repeat: =%s=" repeat)
 		  ;; (format "tz: %s %s" dttz (org-ics/tz-offset dttz))
 		  ;; ""
-		  ;; "#+BEGIN_SRC emacs-lisp"
-		  ;; (pp-to-string
-		  ;;  (org-ics/event-raw-event event))
-		  ;; "#+END_SRC emacs-lisp"
-		  ;; ""
+		  "#+BEGIN_SRC emacs-lisp"
+		  (pp-to-string
+		   (org-ics/event-raw-event event))
+		  "#+END_SRC emacs-lisp"
+		  ""
 		  ))))
 
 ;; ==== ====
@@ -262,7 +266,8 @@
 	 (delta (make-decoded-time :day 7))
 	 (start (decoded-time-add dtstart delta))
 	 (current-time (decode-time)))
-    (time-less-p (encode-time current-time) (encode-time start))))
+    (or (time-less-p (encode-time current-time) (encode-time start))
+	(org-ics/repeats? (org-ics/event-repeat event)))))
 
 ;; (defun org-ics/expand-repeat (event)
 ;;   "Expand events that repeat multiple times per week into separate events."
@@ -293,12 +298,6 @@
 	 (events (-filter 'org-ics/event-filter events))
 	 (org-events (-map 'org-ics/to-org-event events))
 	 (res org-events))
-    ;; (s-concat
-    ;;  "#+TITLE: Calendar\n"
-    ;;  "#+CATEGORY: Calendar\n"
-    ;;  "#+FILETAGS: EVENT\n"
-    ;;  "\n"
-    ;;  (s-join "\n" res))
     (s-join "\n" res)))
 
 ;; ==== User interface ==== ;;
@@ -308,16 +307,19 @@
   (let* ((name (org-ics/calendar-name cal))
 	 (category (org-ics/calendar-category cal))
 	 (filetag (org-ics/calendar-file-tag cal)))
-    (s-concat
-     (format "#+TITLE: %s\n" name)
-     (format "#+CATEGORY: %s\n" category)
-     (format "#+FILETAGS: %s\n" filetag)
-     "\n")))
+    (s-join "\n"
+	    (list (format "#+TITLE: %s" name)
+		  (format "#+CATEGORY: %s" category)
+		  (format "#+FILETAGS: %s" filetag)
+		  "#+STARTUP: overview"
+		  "\n"))))
 
 (defun org-ics/process-to-file (ics-text cal)
   (with-current-buffer (find-file-noselect (org-ics/calendar-destination cal))
     (erase-buffer)
     (insert (org-ics/header cal))
+    (insert "* Raw Text for debugging \n\n")
+    (insert ics-text)
     (insert (org-ics/process ics-text))
     (save-buffer)))
 
@@ -343,15 +345,5 @@
     (--map (cond ((org-ics/calendar-file it) (org-ics/import-ics-file-to-org it))
 		 ((org-ics/calendar-url it) (org-ics/import-ics-url-to-org it)))
 	   cals)))
-
-(org-ics/import-all)
-
-
-;; (org-ics/import-ics-url-to-org
-;;  "https://calendar.google.com/calendar/ical/sgtpeacock%40utexas.edu/private-6382215cc9d4e1bb8659bbe82e5f7a0a/basic.ics"
-;;  "test.org"
-;;  )
-;; (org-ics/import-ics-file-to-org "~/OrgFiles/org-data/test.ics" "test.org")
-
 
 (provide 'org-ics)
